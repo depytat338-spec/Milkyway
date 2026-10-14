@@ -1,0 +1,772 @@
+-- ============================================
+-- Spinbot + 3rd Person + Instant Camera Aimbot
+-- Наводится на игроков и ботов, не залипает на мёртвых
+-- ============================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local SETTINGS = {
+    Distance = 1000,
+    CheckWall = false,
+    CheckTeam = false,
+    TargetBots = true,
+    TargetPart = "Head",
+}
+
+-- ✅ Живые настройки
+local CONFIG = {
+    SKIN_ID = 104949796746698,
+    SKIN_SCALE = 2,
+    SKIN_Y_OFFSET = 0,
+    TARGET_DISTANCE = 57,
+    SPIN_SPEED = 33,
+    SMOOTHNESS = 0.02,
+    Y_OFFSET = 2,
+    AIM_INSTANT = true,       -- true = мгновенное наведение, false = плавное
+    AIM_SMOOTHNESS = 1,       -- 1 = мгновенно, 0.1 = плавно
+}
+
+-- 🎀 ПАЛИТРА
+local PINK = {
+    BG = Color3.fromRGB(255, 250, 253),
+    HEADER = Color3.fromRGB(255, 225, 235),
+    HEADER_TEXT = Color3.fromRGB(180, 130, 155),
+    ACCENT = Color3.fromRGB(255, 185, 210),
+    HANDLE = Color3.fromRGB(255, 205, 222),
+    TRACK = Color3.fromRGB(255, 240, 246),
+    TEXT = Color3.fromRGB(165, 115, 140),
+    INPUT_BG = Color3.fromRGB(255, 245, 250),
+}
+
+-- ============ 💾 СОХРАНЕНИЕ ============
+local CONFIG_FILE = "spinbot_config.json"
+
+local function saveConfig()
+    local json = "{"
+    json = json .. '"SKIN_ID":' .. tostring(CONFIG.SKIN_ID) .. ","
+    json = json .. '"SKIN_SCALE":' .. tostring(CONFIG.SKIN_SCALE) .. ","
+    json = json .. '"SKIN_Y_OFFSET":' .. tostring(CONFIG.SKIN_Y_OFFSET) .. ","
+    json = json .. '"TARGET_DISTANCE":' .. tostring(CONFIG.TARGET_DISTANCE) .. ","
+    json = json .. '"SPIN_SPEED":' .. tostring(CONFIG.SPIN_SPEED)
+    json = json .. "}"
+
+    pcall(function()
+        if writefile then writefile(CONFIG_FILE, json) end
+    end)
+end
+
+local function loadConfig()
+    pcall(function()
+        if not readfile or not isfile then return end
+        if not isfile(CONFIG_FILE) then return end
+
+        local content = readfile(CONFIG_FILE)
+        local function extract(key)
+            return tonumber(content:match('"' .. key .. '":([%d%.%-]+)'))
+        end
+
+        local id = extract("SKIN_ID"); if id then CONFIG.SKIN_ID = id end
+        local scale = extract("SKIN_SCALE"); if scale then CONFIG.SKIN_SCALE = scale end
+        local yoff = extract("SKIN_Y_OFFSET"); if yoff then CONFIG.SKIN_Y_OFFSET = yoff end
+        local dist = extract("TARGET_DISTANCE"); if dist then CONFIG.TARGET_DISTANCE = dist end
+        local spin = extract("SPIN_SPEED"); if spin then CONFIG.SPIN_SPEED = spin end
+
+        print("[Config] Настройки загружены")
+    end)
+end
+
+loadConfig()
+
+task.spawn(function()
+    while true do
+        task.wait(5)
+        saveConfig()
+    end
+end)
+
+-- ============ GUI ============
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CombinedCheat"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = 999999
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- Кнопка аимбота
+local aimBtn = Instance.new("TextButton")
+aimBtn.Size = UDim2.new(0, 60, 0, 60)
+aimBtn.Position = UDim2.new(0, 20, 0.5, -30)
+aimBtn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
+aimBtn.Text = ""
+aimBtn.AutoButtonColor = false
+aimBtn.Active = true
+aimBtn.ZIndex = 999999
+aimBtn.Parent = screenGui
+Instance.new("UICorner", aimBtn).CornerRadius = UDim.new(1, 0)
+Instance.new("UIStroke", aimBtn).Color = Color3.fromRGB(255,255,255)
+
+-- Кнопка настроек
+local setBtn = Instance.new("TextButton")
+setBtn.Size = UDim2.new(0, 20, 0, 20)
+setBtn.Position = UDim2.new(0, 20, 0.5, 40)
+setBtn.BackgroundColor3 = PINK.ACCENT
+setBtn.Text = ""
+setBtn.AutoButtonColor = false
+setBtn.Active = true
+setBtn.ZIndex = 999999
+setBtn.Parent = screenGui
+Instance.new("UICorner", setBtn).CornerRadius = UDim.new(1, 0)
+Instance.new("UIStroke", setBtn).Color = PINK.HANDLE
+
+local function makeDraggable(btn)
+    local dragging, dragStart, startPos = false, nil, nil
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; dragStart = input.Position; startPos = btn.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = input.Position - dragStart
+            if d.Magnitude > 15 then
+                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+end
+makeDraggable(aimBtn)
+makeDraggable(setBtn)
+
+-- ============ МЕНЮ ============
+local panel = Instance.new("Frame")
+panel.Size = UDim2.new(0, 100, 0, 130)
+panel.Position = UDim2.new(0.5, -50, 0.5, -65)
+panel.BackgroundColor3 = PINK.BG
+panel.BorderSizePixel = 0
+panel.Active = true
+panel.Visible = false
+panel.ZIndex = 1000000
+panel.Parent = screenGui
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", panel).Color = PINK.ACCENT
+Instance.new("UIStroke", panel).Thickness = 1
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 16)
+header.BackgroundColor3 = PINK.HEADER
+header.BorderSizePixel = 0
+header.ZIndex = 1000001
+header.Parent = panel
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
+
+local headerFix = Instance.new("Frame")
+headerFix.Size = UDim2.new(1, 0, 0, 6)
+headerFix.Position = UDim2.new(0, 0, 1, -6)
+headerFix.BackgroundColor3 = PINK.HEADER
+headerFix.BorderSizePixel = 0
+headerFix.ZIndex = 1000001
+headerFix.Parent = header
+
+local headerText = Instance.new("TextLabel")
+headerText.Size = UDim2.new(1, -20, 1, 0)
+headerText.Position = UDim2.new(0, 6, 0, 0)
+headerText.BackgroundTransparency = 1
+headerText.Text = "Настройки"
+headerText.TextColor3 = PINK.HEADER_TEXT
+headerText.TextSize = 9
+headerText.Font = Enum.Font.GothamBold
+headerText.TextXAlignment = Enum.TextXAlignment.Left
+headerText.ZIndex = 1000002
+headerText.Parent = header
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 13, 0, 13)
+closeBtn.Position = UDim2.new(1, -15, 0, 1.5)
+closeBtn.BackgroundColor3 = PINK.HANDLE
+closeBtn.Text = "×"
+closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.TextSize = 11
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.BorderSizePixel = 0
+closeBtn.ZIndex = 1000002
+closeBtn.Parent = header
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(1, 0)
+closeBtn.MouseButton1Click:Connect(function() panel.Visible = false end)
+
+local pdragging, pdragStart, pstartPos = false, nil, nil
+header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        pdragging = true; pdragStart = input.Position; pstartPos = panel.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if pdragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        local d = input.Position - pdragStart
+        if d.Magnitude > 5 then
+            panel.Position = UDim2.new(pstartPos.X.Scale, pstartPos.X.Offset + d.X, pstartPos.Y.Scale, pstartPos.Y.Offset + d.Y)
+        end
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        pdragging = false
+    end
+end)
+
+-- TextBox ID
+local idLabel = Instance.new("TextLabel")
+idLabel.Size = UDim2.new(0, 30, 0, 14)
+idLabel.Position = UDim2.new(0, 5, 0, 19)
+idLabel.BackgroundTransparency = 1
+idLabel.Text = "ID:"
+idLabel.TextColor3 = PINK.TEXT
+idLabel.TextSize = 8
+idLabel.Font = Enum.Font.GothamBold
+idLabel.TextXAlignment = Enum.TextXAlignment.Left
+idLabel.ZIndex = 1000002
+idLabel.Parent = panel
+
+local idBox = Instance.new("TextBox")
+idBox.Size = UDim2.new(1, -40, 0, 14)
+idBox.Position = UDim2.new(0, 35, 0, 19)
+idBox.BackgroundColor3 = PINK.INPUT_BG
+idBox.BorderSizePixel = 0
+idBox.Text = tostring(CONFIG.SKIN_ID)
+idBox.TextColor3 = PINK.TEXT
+idBox.Font = Enum.Font.GothamBold
+idBox.TextSize = 7
+idBox.ZIndex = 1000002
+idBox.ClearTextOnFocus = false
+idBox.Parent = panel
+Instance.new("UICorner", idBox).CornerRadius = UDim.new(0, 4)
+
+local idStroke = Instance.new("UIStroke", idBox)
+idStroke.Color = PINK.ACCENT
+idStroke.Thickness = 1
+
+idBox.FocusLost:Connect(function()
+    local newId = tonumber(idBox.Text)
+    if newId and newId > 0 then
+        CONFIG.SKIN_ID = newId
+        idStroke.Color = Color3.fromRGB(160, 220, 160)
+        saveConfig()
+        if _G.ReloadSkin then _G.ReloadSkin() end
+        task.delay(1.5, function() idStroke.Color = PINK.ACCENT end)
+    else
+        idBox.Text = tostring(CONFIG.SKIN_ID)
+        idStroke.Color = Color3.fromRGB(255, 150, 170)
+        task.delay(1, function() idStroke.Color = PINK.ACCENT end)
+    end
+end)
+
+-- Слайдер
+local function makeSlider(parent, yPos, labelText, minVal, maxVal, currentVal, step, onChanged, onRelease)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -8, 0, 22)
+    row.Position = UDim2.new(0, 4, 0, yPos)
+    row.BackgroundTransparency = 1
+    row.ZIndex = 1000001
+    row.Parent = parent
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -30, 0, 10)
+    label.Position = UDim2.new(0, 2, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = PINK.TEXT
+    label.TextSize = 7
+    label.Font = Enum.Font.GothamBold
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.ZIndex = 1000002
+    label.Parent = row
+
+    local valueLabel = Instance.new("TextLabel")
+    valueLabel.Size = UDim2.new(0, 32, 0, 10)
+    valueLabel.Position = UDim2.new(1, -32, 0, 0)
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Text = tostring(currentVal)
+    valueLabel.TextColor3 = PINK.ACCENT
+    valueLabel.TextSize = 7
+    valueLabel.Font = Enum.Font.GothamBold
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+    valueLabel.ZIndex = 1000002
+    valueLabel.Parent = row
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(1, -4, 0, 5)
+    track.Position = UDim2.new(0, 2, 0, 13)
+    track.BackgroundColor3 = PINK.TRACK
+    track.BorderSizePixel = 0
+    track.ZIndex = 1000002
+    track.Parent = row
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new((currentVal - minVal) / (maxVal - minVal), 0, 1, 0)
+    fill.BackgroundColor3 = PINK.ACCENT
+    fill.BorderSizePixel = 0
+    fill.ZIndex = 1000003
+    fill.Parent = track
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+    local handle = Instance.new("Frame")
+    handle.Size = UDim2.new(0, 10, 0, 10)
+    handle.Position = UDim2.new((currentVal - minVal) / (maxVal - minVal), -5, 0.5, -5)
+    handle.BackgroundColor3 = PINK.HANDLE
+    handle.BorderSizePixel = 0
+    handle.ZIndex = 1000004
+    handle.Parent = track
+    Instance.new("UICorner", handle).CornerRadius = UDim.new(1, 0)
+    Instance.new("UIStroke", handle).Color = Color3.new(1,1,1)
+    Instance.new("UIStroke", handle).Thickness = 1.5
+
+    local value = currentVal
+    local dragging = false
+
+    local function updateValue(inputX)
+        local relX = (inputX - track.AbsolutePosition.X) / track.AbsoluteSize.X
+        relX = math.clamp(relX, 0, 1)
+        local val = minVal + (maxVal - minVal) * relX
+        val = math.floor(val / step + 0.5) * step
+        val = math.clamp(val, minVal, maxVal)
+        value = val
+
+        local pos = (val - minVal) / (maxVal - minVal)
+        fill.Size = UDim2.new(pos, 0, 1, 0)
+        handle.Position = UDim2.new(pos, -5, 0.5, -5)
+
+        if step >= 1 then
+            valueLabel.Text = tostring(math.floor(val))
+        else
+            valueLabel.Text = string.format("%.1f", val)
+        end
+
+        onChanged(val)
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            updateValue(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            updateValue(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if dragging then
+                dragging = false
+                saveConfig()
+                if onRelease then onRelease(value) end
+            end
+        end
+    end)
+end
+
+makeSlider(panel, 38, "Размер", 0.5, 8, CONFIG.SKIN_SCALE, 0.5, function(v)
+    CONFIG.SKIN_SCALE = v
+end, function(v)
+    if _G.ReloadSkin then _G.ReloadSkin() end
+end)
+
+makeSlider(panel, 62, "Высота", -20, 30, CONFIG.SKIN_Y_OFFSET, 1, function(v)
+    CONFIG.SKIN_Y_OFFSET = v
+end)
+
+makeSlider(panel, 86, "Дальность камеры", 20, 1000, CONFIG.TARGET_DISTANCE, 5, function(v)
+    CONFIG.TARGET_DISTANCE = v
+end)
+
+makeSlider(panel, 110, "Спин", 0, 300, CONFIG.SPIN_SPEED, 5, function(v)
+    CONFIG.SPIN_SPEED = v
+end)
+
+local isOpen = false
+setBtn.MouseButton1Click:Connect(function()
+    isOpen = not isOpen
+    panel.Visible = isOpen
+end)
+
+-- ============ СОСТОЯНИЕ ============
+local aimEnabled = false
+local spinAngle = 0
+local skinParts = {}
+local skinModel = nil
+local currentChar = nil
+
+-- ============ ЧИСТКА РУК ============
+local function cleanArms()
+    for _, obj in ipairs(camera:GetChildren()) do
+        if obj.Name ~= "SpinSkin" and obj ~= player.Character then
+            local n = obj.Name:lower()
+            if n:find("arm") or n:find("view") or n:find("hand") or n:find("weapon") or n:find("tool") or n:find("fps") then
+                pcall(function() obj:Destroy() end)
+            end
+        end
+    end
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj ~= player.Character and obj.Name ~= "SpinSkin" then
+            local n = obj.Name:lower()
+            if (n:find("arms") or n:find("viewmodel") or n:find("weaponmodel") or n:find("fpsarms"))
+               and not Players:GetPlayerFromCharacter(obj) then
+                if obj:IsA("Model") or obj:IsA("Folder") then
+                    pcall(function() obj:Destroy() end)
+                end
+            end
+        end
+    end
+end
+
+-- ============ ЗАГРУЗКА МОДЕЛИ ============
+local function loadSkin()
+    local ok, result = pcall(function()
+        return game:GetObjects("rbxassetid://" .. CONFIG.SKIN_ID)
+    end)
+
+    if not ok or not result or #result == 0 then
+        warn("[Skin] Не удалось загрузить " .. CONFIG.SKIN_ID)
+        return nil
+    end
+
+    local model
+    for _, obj in ipairs(result) do
+        if obj:IsA("Model") then model = obj; break end
+    end
+    if not model then model = result[1] end
+    if not model then return nil end
+
+    model.Name = "SpinSkin"
+
+    for _, p in ipairs(model:GetDescendants()) do
+        if p:IsA("Script") or p:IsA("LocalScript") or p:IsA("ModuleScript") then
+            pcall(function() p:Destroy() end)
+        elseif p:IsA("Motor6D") or p:IsA("Weld") or p:IsA("WeldConstraint") then
+            pcall(function() p:Destroy() end)
+        end
+    end
+
+    if CONFIG.SKIN_SCALE ~= 1 then
+        local cf, size = model:GetBoundingBox()
+        local center = cf.Position
+        for _, p in ipairs(model:GetDescendants()) do
+            if p:IsA("BasePart") then
+                local rel = center - p.Position
+                p.Size = p.Size * CONFIG.SKIN_SCALE
+                p.Position = center - rel * CONFIG.SKIN_SCALE
+            end
+        end
+    end
+
+    for _, p in ipairs(model:GetDescendants()) do
+        if p:IsA("BasePart") then
+            p.Anchored = true
+            p.CanCollide = false
+            p.CanQuery = false
+            p.CanTouch = false
+            p.Massless = true
+        end
+    end
+
+    local centerCFrame = model:GetBoundingBox()
+
+    skinParts = {}
+    for _, p in ipairs(model:GetDescendants()) do
+        if p:IsA("BasePart") then
+            table.insert(skinParts, {
+                part = p,
+                offset = centerCFrame:ToObjectSpace(p.CFrame),
+            })
+        end
+    end
+
+    model.Parent = camera
+    print("[Skin] Загружено: " .. model.Name)
+    return model
+end
+
+-- ============ ПРИЦЕЛ ============
+local function hideCrosshair()
+    local pg = player:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local ch = pg:FindFirstChild("CrosshairGui")
+    if ch then
+        if ch:IsA("ScreenGui") then ch.Enabled = false
+        else ch.Visible = false end
+    end
+end
+
+-- ============ РЕСПАВН ============
+local function setupCharacter(char)
+    currentChar = char
+    task.wait(0.5)
+    hideCrosshair()
+end
+
+player.CharacterAdded:Connect(setupCharacter)
+if player.Character then setupCharacter(player.Character) end
+
+task.spawn(function()
+    task.wait(1)
+    skinModel = loadSkin()
+end)
+
+-- ============ 3-е ЛИЦО ============
+local function forceThirdPerson()
+    if player.CameraMode ~= Enum.CameraMode.Classic then player.CameraMode = Enum.CameraMode.Classic end
+    if player.CameraMaxZoomDistance ~= 1000 then player.CameraMaxZoomDistance = 1000 end
+    if camera.CameraType ~= Enum.CameraType.Custom then camera.CameraType = Enum.CameraType.Custom end
+    if currentChar then
+        local hum = currentChar:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if camera.CameraSubject ~= hum then camera.CameraSubject = hum end
+            if hum.CameraOffset ~= Vector3.new(0,0,0) then hum.CameraOffset = Vector3.new(0,0,0) end
+        end
+    end
+end
+
+-- ============ КАМЕРА ============
+local function cameraFollow(dt)
+    if not currentChar or not currentChar.Parent then return end
+    local hrp = currentChar:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local focusPos = hrp.Position + Vector3.new(0, CONFIG.Y_OFFSET, 0)
+    local currentCFrame = camera.CFrame
+    local rotation = currentCFrame - currentCFrame.Position
+    local lookDir = currentCFrame.LookVector
+    local targetPos = focusPos - lookDir * CONFIG.TARGET_DISTANCE
+    local alpha = math.clamp(CONFIG.SMOOTHNESS * dt * 60, 0, 1)
+    local newPos = currentCFrame.Position:Lerp(targetPos, alpha)
+    camera.CFrame = CFrame.new(newPos) * rotation
+end
+
+-- ============ СПИНБОТ ============
+local function spinBot(dt)
+    if not currentChar or not currentChar.Parent then return end
+
+    for _, p in ipairs(currentChar:GetDescendants()) do
+        if p:IsA("BasePart") then
+            if p.Transparency ~= 1 then p.Transparency = 1 end
+            if p.LocalTransparencyModifier ~= 1 then p.LocalTransparencyModifier = 1 end
+        elseif p:IsA("Decal") or p:IsA("Texture") then
+            if p.Transparency ~= 1 then p.Transparency = 1 end
+        end
+    end
+
+    spinAngle = (spinAngle + CONFIG.SPIN_SPEED * dt) % (math.pi * 2)
+    local hrp = currentChar:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local baseCF = CFrame.new(hrp.Position + Vector3.new(0, CONFIG.SKIN_Y_OFFSET, 0)) * CFrame.Angles(0, spinAngle, 0)
+
+    for _, data in ipairs(skinParts) do
+        local p = data.part
+        if p and p.Parent then
+            pcall(function()
+                p.CFrame = baseCF * data.offset
+            end)
+        end
+    end
+end
+
+-- ============ АИМБОТ — ЖЁСТКАЯ ПРОВЕРКА ЖИВОСТИ ============
+-- Проверяет: живой ли персонаж
+local function isAlive(char)
+    if not char or not char.Parent then return false end
+
+    -- Должен быть в workspace
+    if not char:IsDescendantOf(workspace) then return false end
+
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+
+    -- HP > 0
+    if hum.Health <= 0 then return false end
+
+    -- Состояние Dead
+    local state = hum:GetState()
+    if state == Enum.HumanoidStateType.Dead then return false end
+
+    -- Должны быть ключевые части
+    if not char:FindFirstChild("Head") then return false end
+    if not char:FindFirstChild("HumanoidRootPart") then return false end
+
+    return true
+end
+
+local function isEnemy(tp)
+    if not SETTINGS.CheckTeam then return true end
+    local lt = player.Team
+    if not lt or tp.Neutral or player.Neutral then return true end
+    return tp.Team ~= lt
+end
+
+local function isValidTarget(target)
+    local char = target.Character
+    if not char or not char.Parent then return false end
+    if target == player or char == player.Character then return false end
+    if char.Name == "SpinSkin" or char:IsDescendantOf(camera) then return false end
+    if target.IsPlayer and not isEnemy(target.Player) then return false end
+    return isAlive(char)
+end
+
+-- Собираем всех (игроки + боты)
+local function getTargets()
+    local t, seen = {}, {}
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            table.insert(t, {Character = p.Character, IsPlayer = true, Player = p})
+            seen[p.Character] = true
+        end
+    end
+
+    if SETTINGS.TargetBots then
+        local function scan(par)
+            for _, m in ipairs(par:GetChildren()) do
+                if m.Name == "SpinSkin" or m:IsDescendantOf(camera) then continue end
+                if m:IsA("Model") and not seen[m] and m ~= player.Character
+                   and not Players:GetPlayerFromCharacter(m) then
+                    local hum = m:FindFirstChildOfClass("Humanoid")
+                    local hrp = m:FindFirstChild("HumanoidRootPart")
+                    if hum and hrp and hum.Health > 0 then
+                        table.insert(t, {Character = m, IsPlayer = false, Player = nil})
+                        seen[m] = true
+                    end
+                end
+                if m:IsA("Folder") or m:IsA("Model") then scan(m) end
+            end
+        end
+        scan(workspace)
+    end
+
+    return t
+end
+
+local function getPos(char)
+    if not char then return nil end
+    local part = char:FindFirstChild(SETTINGS.TargetPart)
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
+    return part and part.Position or nil
+end
+
+-- ✅ Ближайший живой
+local function findTarget()
+    local origin = camera.CFrame.Position
+    local best, bestPos, bestD = nil, nil, math.huge
+
+    for _, t in ipairs(getTargets()) do
+        if isValidTarget(t) then
+            local pos = getPos(t.Character)
+            if pos then
+                local d = (pos - origin).Magnitude
+                if d <= SETTINGS.Distance and d < bestD then
+                    bestD = d
+                    best = t
+                    bestPos = pos
+                end
+            end
+        end
+    end
+
+    return best, bestPos
+end
+
+-- ✅ ОСНОВНОЙ ЦИКЛ АИМБОТА — мгновенное наведение камеры
+local lastTarget = nil
+local targetLock = 0
+
+local function aimbotUpdate(dt)
+    if not aimEnabled then return end
+
+    local myChar = player.Character
+    if not myChar or not isAlive(myChar) then return end
+
+    local target, targetPos = findTarget()
+    if not target or not targetPos then
+        lastTarget = nil
+        return
+    end
+
+    -- Проверяем, что цель ещё жива (двойная проверка)
+    if not isValidTarget(target) then
+        lastTarget = nil
+        return
+    end
+
+    lastTarget = target
+
+    -- ✅ МГНОВЕННОЕ наведение: камера смотрит на цель
+    local currentCam = camera.CFrame
+    local targetCam = CFrame.new(currentCam.Position, targetPos)
+
+    if CONFIG.AIM_INSTANT then
+        -- Мгновенно
+        camera.CFrame = targetCam
+    else
+        -- Плавно
+        local alpha = math.clamp(CONFIG.AIM_SMOOTHNESS * dt * 60, 0, 1)
+        camera.CFrame = currentCam:Lerp(targetCam, alpha)
+    end
+end
+
+-- Кнопка аимбота
+aimBtn.MouseButton1Click:Connect(function()
+    aimEnabled = not aimEnabled
+    if aimEnabled then
+        aimBtn.BackgroundColor3 = Color3.fromRGB(40, 200, 80)
+        print("[Aimbot] ON")
+    else
+        aimBtn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
+        lastTarget = nil
+        print("[Aimbot] OFF")
+    end
+end)
+
+-- ============ ОСНОВНОЙ ЦИКЛ ============
+RunService.RenderStepped:Connect(function(dt)
+    cleanArms()
+    hideCrosshair()
+    forceThirdPerson()
+    cameraFollow(dt)
+    spinBot(dt)
+    aimbotUpdate(dt)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        cleanArms()
+    end
+end)
+
+_G.ReloadSkin = function()
+    if skinModel then skinModel:Destroy() end
+    skinParts = {}
+    skinModel = nil
+    task.wait(0.2)
+    skinModel = loadSkin()
+end
+
+_G.AimSettings = SETTINGS
+_G.AimConfig = CONFIG
+
+print("[Spinbot + Aimbot] Готов. ID: " .. CONFIG.SKIN_ID)
+print("Красная = аимбот | Розовая = настройки")
